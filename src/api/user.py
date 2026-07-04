@@ -1,7 +1,6 @@
-from fastapi import FastAPI
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from fastapi import APIRouter, HTTPException, status, Depends
-from src.shemas.example import UserCreate
+from src.schemas.example import UserCreate
 from src.backend.db import  AsyncSession
 from src.models_db.user import User
 from src.core.security import get_current_user
@@ -44,15 +43,27 @@ async def create_user(user_data: UserCreate, db: AsyncSession = Depends(get_db))
         "email": new_user.email,
 
     }
+
+
 @router.delete("/me")
 async def delete_account(
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+        db: AsyncSession = Depends(get_db),
 ):
-    user_in_db = await db.get(User, current_user.id)
-    if not user_in_db:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found or already deactivated")
+    # Получаем пользователя с блокировкой строки для избежания race conditions
+    result = await db.execute(
+        select(User).where(User.id == current_user.id).with_for_update()
+    )
+    user_in_db = result.scalar_one_or_none()
 
-    user_in_db.is_active = False
+    if not user_in_db:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    user_name = user_in_db.name
+    # Удаляем пользователя
+    await db.delete(user_in_db)
     await db.commit()
-    return {"message": "Account deactivated"}
+
+    return {"message": f"Account {user_name} permanently deleted"}
